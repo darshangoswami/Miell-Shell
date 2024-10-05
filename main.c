@@ -12,8 +12,9 @@
 #define MAX_PIPES 20
 
 int execute_builtin(char **args);
-void execute_command(char **args, int input_fd, int output_fd, int background);
+int execute_command(char **args, int input_fd, int output_fd, int background, int is_last_command);
 void parse_and_execute(char *input);
+char** expand_wildcards(char** args);
 char** tokenize(char* str, const char* delim);
 
 int main() {
@@ -46,6 +47,11 @@ char** tokenize(char* str, const char* delim) {
 
     token = strtok(str, delim);
     while(token != NULL && i < MAX_ARGS - 1) {
+        // Remove surrounding quotes if present
+        if (token[0] == '"' && token[strlen(token)-1] == '"') {
+            token[strlen(token)-1] = '\0';
+            token++;
+        }
         result[i] = strdup(token);
         token = strtok(NULL, delim);
         i++;
@@ -118,9 +124,13 @@ void parse_and_execute(char *input) {
         return;
     }
 
+    fprintf(stderr, "DEBUG: Parsing command: %s\n", input);
+
     char **commands = tokenize(input, "|");
     int num_commands = 0;
     while (commands[num_commands] != NULL) num_commands++;
+
+    fprintf(stderr, "DEBUG: Number of commands in pipeline: %d\n", num_commands);
 
     int pipes[MAX_PIPES][2];
     for (int i = 0; i < num_commands - 1; i++) {
@@ -137,6 +147,10 @@ void parse_and_execute(char *input) {
         commands[num_commands-1][strlen(commands[num_commands-1]) - 1] = '\0';
     }
 
+    fprintf(stderr, "DEBUG: Background execution: %s\n", background ? "yes" : "no");
+
+    int last_command_status = 0;
+
     for (int i = 0; i < num_commands; i++) {
         char **args = tokenize(commands[i], " \t");
         
@@ -149,6 +163,12 @@ void parse_and_execute(char *input) {
         }
         free(args);
         args = expanded_args;
+
+        fprintf(stderr, "DEBUG: Command %d: ", i);
+        for (int j = 0; args[j] != NULL; j++) {
+            fprintf(stderr, "%s ", args[j]);
+        }
+        fprintf(stderr, "\n");
 
         if (args[0] == NULL) {
             fprintf(stderr, "Error: Empty command\n");
@@ -213,7 +233,15 @@ void parse_and_execute(char *input) {
             output_fd = pipes[i][1];
         }
 
-        execute_command(args, input_fd, output_fd, (i == num_commands - 1) ? background : 0);
+        fprintf(stderr, "DEBUG: Command %d - input_fd: %d, output_fd: %d\n", i, input_fd, output_fd);
+
+        int is_last_command = (i == num_commands - 1);
+        int command_status = execute_command(args, input_fd, output_fd, (is_last_command && background), is_last_command);
+
+        // For pipelines, we only care about the status of the last command
+        if (is_last_command) {
+            last_command_status = command_status;
+        }
 
         // Free the memory allocated for args
         for (int j = 0; args[j] != NULL; j++) {
@@ -221,6 +249,7 @@ void parse_and_execute(char *input) {
         }
         free(args);
 
+        // Close pipe ends that are no longer needed
         if (i > 0) {
             close(pipes[i - 1][0]);
         }
@@ -239,14 +268,21 @@ void parse_and_execute(char *input) {
     if (!background) {
         while (wait(NULL) > 0);
     }
+
+    // Only report non-zero status for the last command in the pipeline
+    if (last_command_status != 0 && !background) {
+        fprintf(stderr, "Pipeline exited with non-zero status %d\n", last_command_status);
+    }
+
+    fprintf(stderr, "DEBUG: Command execution completed\n");
 }
 
-void execute_command(char **args, int input_fd, int output_fd, int background) {
+int execute_command(char **args, int input_fd, int output_fd, int background, int is_last_command) {
     pid_t pid = fork();
 
     if (pid == -1) {
         perror("fork");
-        exit(1);
+        return -1;
     } else if (pid == 0) {
         // Child process
         if (input_fd != STDIN_FILENO) {
@@ -259,6 +295,18 @@ void execute_command(char **args, int input_fd, int output_fd, int background) {
             close(output_fd);
         }
 
+        // Close all other pipe file descriptors
+        for (int i = 3; i < 20; i++) {  // Assuming max file descriptor is less than 20
+            if (i != input_fd && i != output_fd) {
+                close(i);
+            }
+        }
+
+        fprintf(stderr, "DEBUG: Executing command: %s\n", args[0]);
+        for (int i = 0; args[i] != NULL; i++) {
+            fprintf(stderr, "DEBUG: arg[%d] = %s\n", i, args[i]);
+        }
+
         execvp(args[0], args);
         // If execvp returns, it must have failed
         fprintf(stderr, "Error: Command not found or failed to execute: %s\n", args[0]);
@@ -268,11 +316,17 @@ void execute_command(char **args, int input_fd, int output_fd, int background) {
         if (!background) {
             int status;
             waitpid(pid, &status, 0);
-            if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
-                fprintf(stderr, "Command exited with non-zero status\n");
+            if (WIFEXITED(status)) {
+                int exit_status = WEXITSTATUS(status);
+                fprintf(stderr, "DEBUG: Command '%s' exited with status %d\n", args[0], exit_status);
+                return exit_status;
+            } else if (WIFSIGNALED(status)) {
+                fprintf(stderr, "Command '%s' killed by signal %d\n", args[0], WTERMSIG(status));
+                return -1;
             }
         } else {
             printf("[1] %d\n", pid);
         }
     }
+    return 0;
 }
