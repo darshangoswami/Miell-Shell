@@ -5,6 +5,7 @@
 #include <sys/wait.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <glob.h>
 
 #define MAX_INPUT_SIZE 1024
 #define MAX_ARGS 64
@@ -75,6 +76,36 @@ int execute_builtin(char **args) {
     return 0;
 }
 
+char** expand_wildcards(char** args) {
+       char** expanded_args = NULL;
+       int expanded_size = 0;
+       int expanded_capacity = 10;
+       expanded_args = malloc(expanded_capacity * sizeof(char*));
+
+       for (int i = 0; args[i] != NULL; i++) {
+           if (strchr(args[i], '*') != NULL || strchr(args[i], '?') != NULL) {
+               glob_t globbuf;
+               int glob_result = glob(args[i], GLOB_NOCHECK | GLOB_TILDE, NULL, &globbuf);
+               if (glob_result == 0) {
+                   for (size_t j = 0; j < globbuf.gl_pathc; j++) {
+                       if (expanded_size >= expanded_capacity - 1) {
+                           expanded_capacity *= 2;
+                           expanded_args = realloc(expanded_args, expanded_capacity * sizeof(char*));
+                       }
+                       expanded_args[expanded_size++] = strdup(globbuf.gl_pathv[j]);
+                   }
+               } else {
+                   expanded_args[expanded_size++] = strdup(args[i]);
+               }
+               globfree(&globbuf);
+           } else {
+               expanded_args[expanded_size++] = strdup(args[i]);
+           }
+       }
+       expanded_args[expanded_size] = NULL;
+       return expanded_args;
+}
+
 void parse_and_execute(char *input) {
     // Trim leading and trailing whitespace
     while (*input == ' ' || *input == '\t') input++;
@@ -108,6 +139,16 @@ void parse_and_execute(char *input) {
 
     for (int i = 0; i < num_commands; i++) {
         char **args = tokenize(commands[i], " \t");
+        
+        // Apply wildcard expansion
+        char **expanded_args = expand_wildcards(args);
+        
+        // Free the original args
+        for (int j = 0; args[j] != NULL; j++) {
+            free(args[j]);
+        }
+        free(args);
+        args = expanded_args;
 
         if (args[0] == NULL) {
             fprintf(stderr, "Error: Empty command\n");
