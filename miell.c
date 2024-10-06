@@ -7,6 +7,7 @@
 #include <errno.h>
 #include <time.h>
 #include <stdarg.h>
+#include <glob.h>
 
 #define MAX_INPUT_SIZE 1024
 #define MAX_ARG_COUNT 64
@@ -21,6 +22,7 @@ void handle_pipes(char*** commands, int command_count, int is_background);
 void handle_redirection(char** args, int* arg_count, int* input_fd, int* output_fd);
 void free_commands(char*** commands, int command_count);
 void debug_log(const char* format, ...);
+char** expand_wildcards(char** args, int* arg_count);
 
 int main() {
     char input[MAX_INPUT_SIZE];
@@ -102,7 +104,50 @@ char** parse_input(char* input, int* arg_count) {
         *arg_count = count;
     }
     debug_log("Parsed %d arguments\n", count);
+
+    // Expand wildcards
+    args = expand_wildcards(args, &count);
+    if (arg_count) {
+        *arg_count = count;
+    }
+    debug_log("After wildcard expansion: %d arguments\n", count);
+
     return args;
+}
+
+char** expand_wildcards(char** args, int* arg_count) {
+    char** new_args = malloc(MAX_ARG_COUNT * sizeof(char*));
+    int new_count = 0;
+    glob_t glob_result;
+
+    for (int i = 0; i < *arg_count; i++) {
+        if (strchr(args[i], '*') || strchr(args[i], '?')) {
+            // Perform wildcard expansion
+            int glob_flags = GLOB_NOCHECK | GLOB_TILDE;
+            if (glob(args[i], glob_flags, NULL, &glob_result) == 0) {
+                for (size_t j = 0; j < glob_result.gl_pathc && new_count < MAX_ARG_COUNT - 1; j++) {
+                    new_args[new_count] = strdup(glob_result.gl_pathv[j]);
+                    new_count++;
+                }
+                globfree(&glob_result);
+            }
+        } else {
+            // No wildcard, just copy the argument
+            new_args[new_count] = strdup(args[i]);
+            new_count++;
+        }
+    }
+
+    new_args[new_count] = NULL;
+    *arg_count = new_count;
+
+    // Free the old args
+    for (int i = 0; args[i] != NULL; i++) {
+        free(args[i]);
+    }
+    free(args);
+
+    return new_args;
 }
 
 int execute_builtin(char** args) {
