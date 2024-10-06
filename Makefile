@@ -1,19 +1,5 @@
-CC = gcc
-CFLAGS = -Wall -Wextra -pedantic -std=c99 -Werror -Wno-unknown-pragmas
-LDFLAGS = 
-TARGET = miell
-SRCS = miell.c
-OBJS = $(SRCS:.c=.o)
-
-.PHONY: all clean
-
-all: $(TARGET)
-
-$(TARGET): $(OBJS)
-	$(CC) $(CFLAGS) $(OBJS) -o $(TARGET) $(LDFLAGS)
-
-%.o: %.c
-	$(CC) $(CFLAGS) -c $< -o $@
+miell: miell.c
+	gcc miell.c -o miell
 
 clean:
-	rm -f $(OBJS) $(TARGET)
+	rm -f miell
