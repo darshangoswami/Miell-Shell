@@ -23,6 +23,8 @@ void handle_redirection(char** args, int* arg_count, int* input_fd, int* output_
 void free_commands(char*** commands, int command_count);
 void debug_log(const char* format, ...);
 char** expand_wildcards(char** args, int* arg_count);
+void execute_background_commands(char* input);
+void display_prompt();
 
 int main() {
     char input[MAX_INPUT_SIZE];
@@ -32,8 +34,7 @@ int main() {
     debug_log("Shell started\n");
 
     while (1) {
-        printf("myshell> ");
-        fflush(stdout);
+        display_prompt();
 
         if (fgets(input, sizeof(input), stdin) == NULL) {
             break;
@@ -47,13 +48,10 @@ int main() {
             break;
         }
 
-        // Check for background execution
-        int is_background = 0;
-        int input_len = strlen(input);
-        if (input_len > 0 && input[input_len - 1] == '&') {
-            is_background = 1;
-            input[input_len - 1] = '\0';  // Remove '&'
-            debug_log("Background execution detected\n");
+        // Handle background commands
+        if (strchr(input, '&') != NULL) {
+            execute_background_commands(input);
+            continue;
         }
 
         // Split input into commands (for pipes)
@@ -70,21 +68,75 @@ int main() {
         debug_log("Total commands: %d\n", command_count);
 
         // Handle built-in commands
-        if (command_count == 1 && !is_background && execute_builtin(commands[0])) {
+        if (command_count == 1 && execute_builtin(commands[0])) {
             debug_log("Executed built-in command\n");
             free_commands(commands, command_count);
             continue;
         }
 
         // Handle pipes and execution
-        handle_pipes(commands, command_count, is_background);
+        handle_pipes(commands, command_count, 0);
 
         // Free allocated memory
         free_commands(commands, command_count);
+
+        // Wait for a short time to allow output to be displayed
+        usleep(10000);  // Wait for 10ms
     }
 
     debug_log("Shell exiting\n");
     return 0;
+}
+
+void display_prompt() {
+    printf("\nmyshell> ");
+    fflush(stdout);
+}
+
+void execute_background_commands(char* input) {
+    char* command;
+    char* saveptr;
+    char* token = strtok_r(input, "&", &saveptr);
+    int job_number = 1;
+
+    while (token != NULL) {
+        // Trim leading and trailing whitespace
+        while (*token == ' ' || *token == '\t') token++;
+        char* end = token + strlen(token) - 1;
+        while (end > token && (*end == ' ' || *end == '\t')) end--;
+        *(end + 1) = '\0';
+
+        if (strlen(token) > 0) {
+            // Parse the command into pipes
+            char*** commands = malloc(MAX_PIPE_COUNT * sizeof(char**));
+            int command_count = 0;
+            char* pipe_saveptr;
+            char* pipe_token = strtok_r(token, "|", &pipe_saveptr);
+            while (pipe_token != NULL && command_count < MAX_PIPE_COUNT) {
+                commands[command_count] = parse_input(pipe_token, NULL);
+                command_count++;
+                pipe_token = strtok_r(NULL, "|", &pipe_saveptr);
+            }
+
+            pid_t pid = fork();
+            if (pid == 0) {
+                // Child process
+                handle_pipes(commands, command_count, 1);
+                exit(0);
+            } else if (pid > 0) {
+                // Parent process
+                printf("[%d] %d\n", job_number++, pid);
+                debug_log("Started background job %d (PID: %d): %s\n", job_number - 1, pid, token);
+            } else {
+                perror("fork");
+            }
+
+            // Free allocated memory
+            free_commands(commands, command_count);
+        }
+
+        token = strtok_r(NULL, "&", &saveptr);
+    }
 }
 
 char** parse_input(char* input, int* arg_count) {
@@ -281,18 +333,13 @@ void handle_pipes(char*** commands, int command_count, int is_background) {
         close(pipes[i][1]);
     }
 
-    // Wait for all child processes except the last one if it's a background process
-    for (i = 0; i < command_count - 1; i++) {
-        wait(NULL);
-        debug_log("Waited for command %d to finish\n", i);
-    }
-
+    // Wait for all child processes
     if (!is_background) {
-        int status;
-        waitpid(last_pid, &status, 0);
-        debug_log("Waited for last command (PID: %d) to finish with status: %d\n", last_pid, status);
-    } else {
-        debug_log("Not waiting for background process (PID: %d) to finish\n", last_pid);
+        for (i = 0; i < command_count; i++) {
+            int status;
+            waitpid(-1, &status, 0);
+            debug_log("Child process exited with status: %d\n", status);
+        }
     }
 }
 
