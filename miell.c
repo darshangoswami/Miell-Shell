@@ -24,9 +24,9 @@ void free_commands(char*** commands, int command_count);
 void debug_log(const char* format, ...);
 char** expand_wildcards(char** args, int* arg_count);
 void execute_background_commands(char* input);
-void display_prompt();
+void display_prompt(void);
 
-int main() {
+int main(void) {
     char input[MAX_INPUT_SIZE];
     char*** commands = NULL;
     int command_count;
@@ -88,13 +88,12 @@ int main() {
     return 0;
 }
 
-void display_prompt() {
+void display_prompt(void) {
     printf("\nmiell> ");
     fflush(stdout);
 }
 
 void execute_background_commands(char* input) {
-    char* command;
     char* saveptr;
     char* token = strtok_r(input, "&", &saveptr);
     int job_number = 1;
@@ -271,6 +270,8 @@ void execute_command(char** args, int input_fd, int output_fd, int is_background
     }
 }
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-but-set-variable"
 void handle_pipes(char*** commands, int command_count, int is_background) {
     debug_log("Handling pipes (command_count: %d, background: %d)\n", command_count, is_background);
     int pipes[MAX_PIPE_COUNT-1][2];
@@ -342,6 +343,7 @@ void handle_pipes(char*** commands, int command_count, int is_background) {
         }
     }
 }
+#pragma GCC diagnostic pop
 
 void handle_redirection(char** args, int* arg_count, int* input_fd, int* output_fd) {
     for (int i = 0; i < *arg_count; i++) {
