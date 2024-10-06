@@ -89,7 +89,7 @@ int main() {
 }
 
 void display_prompt() {
-    printf("\nmyshell> ");
+    printf("\nmiell> ");
     fflush(stdout);
 }
 
